@@ -461,8 +461,7 @@ contract HolderClaimTest is Test {
     }
 
     function testFuzz_duplicateBatchMatchesUniquePreview(uint8[] memory rawIds, uint32 elapsed) public {
-        vm.assume(rawIds.length <= 160);
-        uint256[] memory ids = new uint256[](rawIds.length);
+        uint256[] memory ids = new uint256[](bound(rawIds.length, 0, 160));
         bool[112] memory seen;
         uint256 count;
         for (uint256 i; i < ids.length; ++i) {
