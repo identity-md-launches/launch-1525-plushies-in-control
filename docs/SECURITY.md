@@ -4,7 +4,7 @@ This is a local implementation review, not an independent audit. An independent 
 
 ## Scope and assumptions
 
-The production surface is PICToken, HolderClaim, IFWAIRPFP, and their inlined OpenZeppelin dependencies. Test mocks and the allocation harness are not launch artifacts. The Ethereum PFP address is fixed by the assignment. HolderClaim assumes its supplied token is this 18-decimal PIC implementation: rebasing, taxed, malicious, or differently denominated tokens are outside its intended use. The factory must choose the correct constructor argument and fund the full 800,000,000 PIC allocation atomically.
+The production surface is PICToken, HolderClaim, IFWAIRPFP, the internal-only LaunchEconomics library, and their inlined OpenZeppelin dependencies. Test mocks and the allocation harness are not launch artifacts. The Ethereum PFP address is fixed by the assignment. HolderClaim assumes its supplied token is this 18-decimal PIC implementation: rebasing, taxed, malicious, or differently denominated tokens are outside its intended use. The factory must choose the correct constructor argument and fund the full 800,000,000 PIC allocation atomically.
 
 The fixed PFP contract controls NFT ownership and lock records. HolderClaim cannot correct those records or recover funds if the external dependency fails. The NFT's holder at transaction execution has the right to claim; ownership changes before transaction inclusion may invalidate a pending claim. Historical ownership or an NFT approval grants no rights. Timestamp rounding follows the prescribed per-second schedule, with no additional cliff or expiry.
 
@@ -20,6 +20,7 @@ The fixed PFP contract controls NFT ownership and lock records. HolderClaim cann
 | Burn/lock confusion | `ownerOf` reverts produce no holder. Lock records are consulted only while PFP owns the ID. Stale records do not override a direct owner or resurrect burned entitlement. |
 | Loss from repeated rounding | Each payment is the difference of cumulative floors. Daily claims sum to a full SHARE. The total division remainder is 23 base units. |
 | Privileged access or supply changes | No owner/admin/recovery/upgrades; mint occurs only in PICToken's constructor. Standard ERC-20 allowance checks still apply to the deployer. Tests probe common privileged selectors and require rejection. |
+| Launch misallocation | The split is a source constant (`poolBps = 1000`, swarm 10%, remainder 80%) and `HolderClaim.ALLOCATION` reads it. The contracts cannot force the factory to pay; `fundingShortfall()`/`isFunded()` make an underfunded launch visible on chain, and tests show the earlier 88% pool economics and a wallet-routed remainder both leave HolderClaim unable to pay full shares. The views only read `claimed` and the balance and give no one a withdrawal or funding power. |
 | Unbounded enumeration | Caller-supplied arrays cost gas proportional to their length. There are only 111 eligible unique IDs; a test claims all in one batch. No global holder scan, keeper, oracle, or exchange integration exists in the contracts. |
 
 Burned shares, unclaimed balances, excess PIC, and other assets cannot be withdrawn through a recovery path. These are intentional restrictions, not unfinished administrative features.

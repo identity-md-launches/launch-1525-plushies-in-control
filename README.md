@@ -8,6 +8,7 @@ Ethereum mainnet ERC-20 and an immutable vesting claim for FWAIR PFP holders. Th
 | --- | --- | --- |
 | `src/PICToken.sol:PICToken` | No arguments | `Plushies In Control`, `PIC`, 18 decimals; mints exactly 1,000,000,000 PIC to `msg.sender` once |
 | `src/HolderClaim.sol:HolderClaim` | `address token_` = launch `$token` | Pays vested PIC to the current holder of each eligible NFT ID |
+| `src/LaunchEconomics.sol:LaunchEconomics` | Library, internal only, not deployed | Fixes the launch split (`poolBps = 1000`, swarm 10%, remainder 80% to HolderClaim) in source |
 
 PIC is a standard ERC-20 using vendored OpenZeppelin Contracts v5.1.0. Its supply in base units is `1000000000000000000000000000`. It has no fees, later minting, public burning, owner, privileged transfer restrictions, or upgrade mechanism. Ordinary transfers, allowances, and `transferFrom` work normally.
 
@@ -19,19 +20,21 @@ Target Ethereum mainnet, chain ID **1**. Deploy the token first, then **`HolderC
 
 The launch factory initially holds the entire PIC supply. In the same launch transaction, it must distribute it as follows:
 
-| Destination | Share of total supply | PIC | Base units |
-| --- | --- | --- | --- |
-| PIC/FWA pool | 10% (`poolBps = 1000`) | 100,000,000 | `100000000000000000000000000` |
-| Launch swarm distributor | 10% | 100,000,000 | `100000000000000000000000000` |
-| Deployed `HolderClaim` | 80% | 800,000,000 | `800000000000000000000000000` |
+| Destination | Share of total supply | PIC | Base units | Manifest field |
+| --- | --- | --- | --- | --- |
+| PIC/FWA pool | 10% | 100,000,000 | `100000000000000000000000000` | `poolBps = 1000` |
+| Launch swarm distributor | 10% | 100,000,000 | `100000000000000000000000000` | swarm share (unchanged) |
+| Deployed `HolderClaim` | 80% | 800,000,000 | `800000000000000000000000000` | `remainderTo` = HolderClaim, by name |
 
-The task's allocation above is authoritative. HolderClaim's constructor does not take the allocation from the factory: the launch must send it explicitly. The application starts vesting immediately at construction, so delaying funding does not delay vesting. Underfunded payouts revert completely and can be retried after funding; there is no partial payout or funding administrator.
+This is the job's "Option 1" economics: `poolBps` is **1000**, not the earlier 8800, and the whole remainder is routed to the deployed HolderClaim instead of a wallet. The earlier `remainderTo` wallet receives nothing. `initialMarketCapWei`, the FWA pair and the pool parameters stay as they were. The split is fixed in `src/LaunchEconomics.sol` and `HolderClaim.ALLOCATION` reads the remainder from it, so the manifest, the contracts and the tests cannot drift apart. See [docs/LAUNCH.md](docs/LAUNCH.md) for the full manifest checklist.
+
+HolderClaim's constructor does not take the allocation from the factory: the launch must send it explicitly. The application starts vesting immediately at construction, so delaying funding does not delay vesting. Underfunded payouts revert completely and can be retried after funding; there is no partial payout or funding administrator. `fundingShortfall()` reports how many PIC base units the balance is short of every unpaid share, and `isFunded()` is true when it is zero, which is the state immediately after a correct launch.
 
 The pair is FWA at `0xa0Df17B5aC76ABaBA36E1450E2cbCd18A620C845` (18 decimals). The supplied launch policy specifies pool fee `12500` (1.25%), tick spacing `60`, and opening market capitalization `2000000000000000000000000` FWA base units (2,000,000 FWA). The reference `initialPrice` is `79228162514264337593543950336`; the launch system derives the actual opening price from capitalization, supply, and currency ordering. These pool operations belong to the launch system, not either contract here.
 
 The separate manifest step must resolve the remainder recipient to the deployed **HolderClaim**, and pass `$token` to its constructor. This repository intentionally supplies no `launch.json`, signing key, broadcasting script, pool implementation, or swarm distributor. The launch network supplies those integration pieces and performs deployment after acceptance.
 
-Before launch, the launch operator must verify the chosen artifacts and constructor arguments, the mainnet PFP address and ABI, the exact allocation, and that the remainder routing funds HolderClaim atomically. After launch, verify source and inspect `token()`, `START()`, the fixed constants, and the 800,000,000 PIC funding transfer. No contract configuration or keeper is needed afterward. The supplied FWA reference says FWA fee payouts from the launch factory require the FWA owner to register that factory as a distributor; otherwise those fees remain owed in the launch system. HolderClaim handles PIC only.
+Before launch, the launch operator must verify the chosen artifacts and constructor arguments, the mainnet PFP address and ABI, the exact allocation (`poolBps = 1000`, swarm 10%, `remainderTo` resolving to HolderClaim), and that the remainder routing funds HolderClaim atomically. After launch, verify source and inspect `token()`, `START()`, the fixed constants, the 800,000,000 PIC funding transfer, and that `isFunded()` returns true. No contract configuration or keeper is needed afterward. The supplied FWA reference says FWA fee payouts from the launch factory require the FWA owner to register that factory as a distributor; otherwise those fees remain owed in the launch system. HolderClaim handles PIC only.
 
 ## Vesting and ownership
 
@@ -56,6 +59,9 @@ All amounts below are PIC base units.
 | Function | Behavior |
 | --- | --- |
 | `claimed(id)` | Cumulative amount paid for that ID. Public mapping; unset and invalid IDs read as zero. |
+| `ALLOCATION` | `800000000000000000000000000`, the remainder the launch must send here. `SHARE = ALLOCATION / 111`. |
+| `fundingShortfall()` | `max(0, SHARE * 111 - sum(claimed) - balance)`. Claims pay debt and balance together, so only deposits move it. Burned IDs stay counted as owed. The 23 base units of division dust are not owed, so a balance of `ALLOCATION - 23` already reads as zero shortfall. |
+| `isFunded()` | `fundingShortfall() == 0`. True right after a correct launch; false if the remainder was sent elsewhere or the pool share was larger than 10%. |
 | `vested(id)` | Total cumulative vesting, including previously paid amounts; does not check whether the NFT is alive. |
 | `holderOf(id)` | Current direct/lock holder, or the zero address for a burned ID or an empty lock record. |
 | `claimable(id)` | Exactly `vested(id) - claimed(id)`. A burned ID can have a positive accounting value which nobody can receive. |
@@ -78,6 +84,6 @@ forge test
 forge fmt --check
 ```
 
-`foundry.toml` pins Solidity 0.8.26, Cancun, optimizer runs 200, and `bytecode_hash = "none"`. Production bytecode has no linked libraries. Source tests cover launch allocation, ERC-20 failure paths, per-second/end-point vesting, sales, approvals, escrow locks, burns, duplicate batches, failed payment rollback, no-return tokens, and callback reentrancy. Fuzz tests cover arithmetic and duplicate lists; a stateful invariant checks an independent ownership/payment model and conservation across claims, transfers, locks, burns, and time advances.
+`foundry.toml` pins Solidity 0.8.26, Cancun, optimizer runs 200, and `bytecode_hash = "none"`. Production bytecode has no linked libraries: `LaunchEconomics` has only internal functions and is inlined. Source tests cover the 10/10/80 launch split and its failure modes (the earlier `poolBps = 8800` economics, a remainder routed to a wallet), launch allocation, ERC-20 failure paths, per-second/end-point vesting, sales, approvals, escrow locks, burns, duplicate batches, failed payment rollback, no-return tokens, and callback reentrancy. Fuzz tests cover arithmetic and duplicate lists; a stateful invariant checks an independent ownership/payment model and conservation across claims, transfers, locks, burns, and time advances.
 
 PFP behavior is mocked at its mainnet address, with the verified ABI. The allocation harness tests PIC transfers in one local transaction; it does not implement or claim to test a live Uniswap pool. The supplied protected launch harness depends on the launch verifier's factory support files and manifest environment and remains an input to that independent stage. Read [the security review notes](docs/SECURITY.md) for scope and assumptions.

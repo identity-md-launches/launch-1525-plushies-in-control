@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 import {PICToken} from "../src/PICToken.sol";
 import {HolderClaim} from "../src/HolderClaim.sol";
+import {LaunchEconomics} from "../src/LaunchEconomics.sol";
 
 /// @dev Offline allocation simulation only; the production launch factory is supplied by IMD.
 contract LaunchAllocationHarness {
@@ -14,9 +15,10 @@ contract LaunchAllocationHarness {
         token = new PICToken();
         distribution = new HolderClaim(address(token));
         balanceAfterApplicationDeployment = token.balanceOf(address(this));
-        token.transfer(swarm, 100_000_000e18);
-        token.transfer(pool, 100_000_000e18);
-        token.transfer(address(distribution), 800_000_000e18);
+        (uint256 poolShare, uint256 swarmShare, uint256 remainder) = LaunchEconomics.launchSplit();
+        token.transfer(swarm, swarmShare);
+        token.transfer(pool, poolShare);
+        token.transfer(address(distribution), remainder);
     }
 }
 
@@ -54,6 +56,7 @@ contract PICTokenTest is Test {
         assertEq(launched.balanceOf(pool), 100_000_000e18);
         assertEq(address(distribution.token()), address(launched));
         assertEq(distribution.START(), block.timestamp);
+        assertTrue(distribution.isFunded());
 
         vm.prank(swarm);
         assertTrue(launched.transfer(alice, 100_000_000e18));

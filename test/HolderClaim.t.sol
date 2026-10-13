@@ -38,7 +38,10 @@ contract HolderClaimTest is Test {
         assertEq(distribution.PFP(), 0x29f1cBC8eccD64B0cE777f5Da45c72C47383a620);
         assertEq(distribution.MIN_ID(), 1);
         assertEq(distribution.MAX_ID(), 111);
+        assertEq(distribution.ALLOCATION(), ALLOCATION);
         assertEq(distribution.SHARE(), SHARE);
+        assertEq(distribution.fundingShortfall(), 0);
+        assertTrue(distribution.isFunded());
         assertEq(distribution.VESTING(), VESTING);
         assertEq(distribution.claimed(1), 0);
         assertEq(distribution.vested(1), 0);
@@ -383,6 +386,8 @@ contract HolderClaimTest is Test {
         ids[0] = 1;
         ids[1] = 2;
         token.transfer(address(underfunded), SHARE);
+        assertEq(underfunded.fundingShortfall(), SHARE * 110);
+        assertFalse(underfunded.isFunded());
         vm.expectRevert(
             abi.encodeWithSelector(
                 IERC20Errors.ERC20InsufficientBalance.selector, address(underfunded), SHARE, SHARE * 2

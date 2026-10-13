@@ -5,17 +5,21 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IFWAIRPFP} from "./interfaces/IFWAIRPFP.sol";
+import {LaunchEconomics} from "./LaunchEconomics.sol";
 
 /// @title HolderClaim
 /// @notice Twenty-day PIC vesting attached to FWAIR PFP token IDs, payable only to their current holders.
-/// @dev Fund with 800,000,000 PIC in the launch transaction. No owner, upgrades, or token recovery.
+/// @dev The launch transaction funds it with ALLOCATION (800,000,000 PIC), the whole remainder of the supply
+/// after the pool and swarm shares. No owner, upgrades, or token recovery.
 contract HolderClaim is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     address public constant PFP = 0x29f1cBC8eccD64B0cE777f5Da45c72C47383a620;
     uint256 public constant MIN_ID = 1;
     uint256 public constant MAX_ID = 111;
-    uint256 public constant SHARE = uint256(800_000_000 * 1e18) / MAX_ID;
+    /// @notice PIC base units the launch transaction must send here: 80% of the supply, the manifest remainder.
+    uint256 public constant ALLOCATION = LaunchEconomics.HOLDER_CLAIM_ALLOCATION;
+    uint256 public constant SHARE = ALLOCATION / MAX_ID;
     uint256 public constant VESTING = 20 days;
 
     IERC20 public immutable token;
@@ -81,6 +85,23 @@ contract HolderClaim is ReentrancyGuard {
                 total += unlocked - claimed[id];
             }
         }
+    }
+
+    /// @notice PIC base units still owed to the 111 IDs that the current balance does not cover.
+    /// @dev Zero once the launch has routed ALLOCATION here. Claims move balance and debt together, so only
+    /// deposits change it. Burned IDs stay counted as owed because nobody can sweep their share.
+    function fundingShortfall() public view returns (uint256) {
+        uint256 outstanding = SHARE * MAX_ID;
+        for (uint256 id = MIN_ID; id <= MAX_ID; ++id) {
+            outstanding -= claimed[id];
+        }
+        uint256 balance = token.balanceOf(address(this));
+        return outstanding > balance ? outstanding - balance : 0;
+    }
+
+    /// @notice True when every unpaid share is backed by PIC held here, as it is right after a correct launch.
+    function isFunded() external view returns (bool) {
+        return fundingShortfall() == 0;
     }
 
     /// @notice Claim each supplied ID's unpaid vesting into the current holder's wallet.
